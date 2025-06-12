@@ -1,5 +1,5 @@
 ---
-title: "MRSL D2 Knights 2025"
+title: "MRSL D1 Knights 2025"
 output: 
   flexdashboard::flex_dashboard:
     orientation: columns
