@@ -1,0 +1,1121 @@
+---
+title: "MRSL D2 Knights 2025"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    social: menu
+    vertical_layout: fill
+    css: special_style.css
+runtime: shiny
+---
+
+<!--------------------------------------------------------------------------------------
+                                  SET UP: PACKAGES, FUCNTIONS, DATA LAOD 
+------------------------------------------------------------------------------------> 
+
+```{css, echo=FALSE}
+.fluid-row {
+  font-size: 5.9vw;
+}
+```
+
+```{r}
+knitr::opts_chunk$set(
+  echo = F, warning = F, message = F
+)
+```
+
+```{r}
+
+PITCH_FILL = "#189505"
+
+```
+
+```{r packages }
+
+library(readxl)
+library(ggimage)
+library(ggrepel)
+library(ggsoccer)
+library(shinyBS)
+library(gridExtra)
+library(ggthemes, quietly = TRUE)
+library(htmltools, quietly = TRUE)
+require(tidyverse)
+library(plotly)
+library(flexdashboard)
+library(ggsoccer)
+library(googleAuthR)
+library(googlesheets4)
+library(kableExtra)
+library(shinydashboard)
+library(scales)
+library(fontawesome)
+library(DT)
+library(data.table)
+library(rsconnect)
+library(curl)
+
+```
+
+```{r help get access to the sheet, eval = F}
+googlesheets4::gs4_deauth()
+
+googlesheets4::gs4_auth()
+
+```
+
+```{r}
+int_breaks <- function(x, n = 5) {
+  l <- pretty(x, n)
+  l[abs(l %% 1) < .Machine$double.eps ^ 0.5] 
+}
+```
+
+```{r laod goals and assists data}
+
+scores <- read_xlsx('Knights 2025 Scoring .xlsx', sheet = "Goals For")
+
+scores$Group <- 
+  with(scores, 
+       case_when(
+         `Player Position` %in% c("LW", "RW", "ST") ~ "Attackers", 
+         `Player Position` %in% c("CM") ~ "Midfielders", 
+         T ~ "Defenders"
+       ))
+
+scores$Group <- factor(scores$Group, levels = c("Defenders", "Midfielders", "Attackers"))
+
+```
+
+```{R load schedule and resutls data}
+schedule <- 
+  read_xlsx('Knights 2025 Scoring .xlsx', sheet = "Schedule")
+
+schedule <- 
+  schedule %>% 
+  filter(Division == "D1" & !is.na(`Final Score` )) %>% 
+  mutate(
+    game = seq(from = 1, to = nrow(.), by = 1)
+  )
+
+schedule$`Home Score` = with(schedule, substr(`Final Score`, 2, 2))
+schedule$`Home Score` <- as.numeric(schedule$`Home Score`)
+
+schedule$`Away Score` = with(schedule, substr(`Final Score`, 4, 4))
+schedule$`Away Score` <- as.numeric(schedule$`Away Score`)
+
+schedule$our_goals = 
+  with(schedule, 
+       case_when(
+         Home == "Knights" ~ `Home Score`, 
+         T ~ `Away Score`
+       ))
+schedule$our_conceded = 
+  with(schedule, 
+       case_when(
+         Home == "Knights" ~ `Away Score`, 
+         T ~ `Home Score`
+       ))
+
+schedule$opponent = 
+  with(schedule, 
+       case_when(
+         Home == "Knights" ~ Away, 
+         T ~ Home
+       ))
+
+```
+
+```{r}
+
+nrow(schedule) -> games_played_N
+
+games_played <- read_xlsx('2025 Knights Attendance and Game Locations.xlsx', sheet = "Attendance") 
+games_played <- games_played[4:26,4:(4+games_played_N)]
+
+colnames(games_played)[1] = "Player"
+
+games_played %>% pivot_longer(cols = setdiff(colnames(.), "Player")) %>% 
+  mutate(counter = ifelse(is.na(value), 1,0)) %>% 
+
+  group_by(Player) %>% 
+  summarise(
+   games_played = sum(counter)
+    ) %>% 
+  ungroup() -> games_played
+
+```
+
+<!--------------------------------------------------------------------------------------
+                                            DASHBOARD BODY
+------------------------------------------------------------------------------------> 
+
+Team Performance 
+===
+
+Column {data-width=200}
+---
+
+<!-- 
+VALUE BOXES 
+--> 
+
+### Box
+
+```{R}
+
+Goals <- scores %>% filter(Action == "Goal") %>% nrow()
+Goals_total = Goals
+
+Games <- schedule %>% filter(Division == "D1") %>% nrow()
+
+val <- 
+  round(Goals / Games , 2)
+
+cap <- paste0("Scored Goals Per Game <br/>", Goals, " goals in ", Games, " games")
+
+flexdashboard::valueBox(value = val, caption = cap, color = "green", icon = "fa-bullseye")
+```
+
+### Box
+
+```{r, warning=FALSE, message=FALSE}
+
+val <- scores %>% filter(Action == "Goal") %>% filter(Player != "Own Goal") %>% select(Player) %>% unique() %>% nrow()
+
+cap <- paste0("Players with 1+ Goals")
+
+flexdashboard::valueBox(value = val, caption = cap, color = "blue", icon = 'fa-thumbs-up')
+```
+
+### Box
+
+```{r, warning=FALSE, message=FALSE}
+
+Goals <- schedule %>% filter(Division == "D1") %>% summarize(sum(our_conceded)) %>% unlist()
+Games <- schedule %>% filter(Division == "D1") %>% nrow()
+
+val <- 
+  round(Goals / Games , 2)
+
+cap <- paste0("Allowed Goals Per Game <br/>", Goals, " goals in ", Games, " games")
+
+flexdashboard::valueBox(value = val, caption = cap, color = "red", icon = 'fa-hand-paper')
+```
+
+<!-- 
+### Box
+
+```{R}
+
+cap <- paste0("Goals Due to Galacticos Forfeit")
+
+flexdashboard::valueBox(value = 3, caption = cap, color = "orange", icon = 'fa-gear')
+```
+
+--> 
+
+Column { .tabset data-width=450}
+---
+
+### Goals
+
+```{r, warning=FALSE, message=FALSE}
+
+scores %>% 
+  filter(Action == "Goal") %>% 
+  group_by(`Group`,
+           .drop = FALSE) %>% 
+  summarize(n = n(), 
+            p = n()/nrow(.)) -> 
+  
+  goals
+
+goals <- goals %>% arrange(`Group`)
+
+goals$y_lab = c(25,50,75)
+goals$x_lab = c(15,50,85)
+
+goals$label = with(goals, paste0(n, " (", round(p, 4)*100, "%)"
+                                     )
+                     )
+
+
+ggplot(data = goals, 
+       aes(x = x_lab, y = y_lab, label = label)) +
+  annotate_pitch(colour = "#999e9b") +
+  theme_pitch(aspect_ratio = NULL) + 
+  geom_point(color = "white") + 
+  geom_text(size=12) + 
+  theme(title = element_text(size = 20)) + 
+  
+  geom_segment(
+    x = 67, xend = 67, 
+    y = 10, yend = 90,
+    lineend = "round", # See available arrow types in example above
+    linejoin = "round",
+    linetype = "dashed", 
+    size = 2, 
+    colour = "red" # Also accepts "red", "blue' etc
+  )+ 
+  
+  geom_segment(
+    x = 31, xend = 31, 
+    y = 10, yend = 90,
+    lineend = "round", # See available arrow types in example above
+    linejoin = "round",
+    linetype = "dashed", 
+    size = 2, 
+    colour = "red" # Also accepts "red", "blue' etc
+  ) + 
+  
+  geom_segment(
+    x = 15, xend = 25, 
+    y = 85, yend = 85,
+    lineend = "round", # See available arrow types in example above
+    linejoin = "round",
+    size = 1, 
+    arrow = arrow(length = unit(0.1, "inches")),
+    colour = PITCH_FILL # Also accepts "red", "blue' etc
+  ) + 
+  
+  geom_segment(
+    x = 45, xend = 55, 
+    y = 85, yend = 85,
+    lineend = "round", # See available arrow types in example above
+    linejoin = "round",
+    size = 1, 
+    arrow = arrow(length = unit(0.1, "inches")),
+    colour = PITCH_FILL # Also accepts "red", "blue' etc
+  )+ 
+  
+  geom_segment(
+    x = 75, xend = 85, 
+    y = 85, yend = 85,
+    lineend = "round", # See available arrow types in example above
+    linejoin = "round",
+    size = 1, 
+    arrow = arrow(length = unit(0.1, "inches")),
+    colour = PITCH_FILL # Also accepts "red", "blue' etc
+  ) + 
+  
+  theme(text = element_text(size = 20)) + 
+  ggtitle(
+    "Positional Origin of Goals: Defenders | Midfielders | Attackers"
+  ) -> g1 
+```
+
+
+
+```{r, warning=FALSE, message=FALSE}
+
+scores %>% 
+  filter(Action == "Goal") %>% 
+  group_by(`Position`, `Group`) %>% 
+  summarize(n = n(), 
+            p = n()/nrow(.)) %>% 
+  ungroup() %>% 
+  arrange(n) %>% 
+  mutate(id = seq(from = 1, to = nrow(.), by = 1), 
+         row_descr = 
+           paste0(
+             Group, " from \n ", Position
+           ), 
+         row_descr2 = 
+           factor(
+             paste0(
+               Group, " from \n ", Position
+             ), 
+             levels = 
+               paste0(
+                 Group, " from \n ", Position
+               )
+           )
+         ) -> goals
+
+
+ggplot(data = goals, aes(x = row_descr2, y = n)) + 
+  geom_col(
+    color = "grey", fill = "blue"
+  ) + 
+  
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+        panel.background = element_rect(fill = "white"), 
+        text = element_text(size = 20)) + 
+  
+  scale_y_continuous(
+    breaks = seq(from = min(goals$n), to = max(goals$n), by = 2)
+  ) + 
+  ylab("Number of Goals") +
+  
+  xlab("") + 
+  
+  ggtitle("Distribution of Goals by Location and Position") -> g2
+
+```
+
+
+
+```{r,fig.width=10, fig.height=12}
+
+
+grid.arrange(g1, g2, nrow = 2)
+
+```
+
+### Assists
+
+```{r, warning=FALSE, message=FALSE}
+scores %>% 
+  filter(Action == "Assist") %>% 
+  group_by(`Group`,
+           .drop = FALSE) %>% 
+  summarize(n = n(), 
+            p = n()/nrow(.)) -> 
+  
+  assists2
+
+assists2 <- assists2 %>% arrange(`Group`)
+
+assists2$y_lab = c(25,50,75)
+assists2$x_lab = c(15,50,85)
+
+assists2$label = with(assists2, paste0(n, " (", round(p, 4)*100, "%)"
+                                     )
+                     )
+
+
+ggplot(data = assists2, 
+       aes(x = x_lab, y = y_lab, label = label)) +
+  annotate_pitch(colour = "#999e9b") +
+  theme_pitch(aspect_ratio = NULL) + 
+  geom_point(color = "white") + 
+  geom_text(size=12) + 
+  theme(title = element_text(size = 20)) + 
+  
+  geom_segment(
+    x = 67, xend = 67, 
+    y = 10, yend = 90,
+    lineend = "round", # See available arrow types in example above
+    linejoin = "round",
+    linetype = "dashed", 
+    size = 2, 
+    colour = "red" # Also accepts "red", "blue' etc
+  )+ 
+  
+  geom_segment(
+    x = 31, xend = 31, 
+    y = 10, yend = 90,
+    lineend = "round", # See available arrow types in example above
+    linejoin = "round",
+    linetype = "dashed", 
+    size = 2, 
+    colour = "red" # Also accepts "red", "blue' etc
+  ) + 
+  
+  geom_segment(
+    x = 15, xend = 25, 
+    y = 85, yend = 85,
+    lineend = "round", # See available arrow types in example above
+    linejoin = "round",
+    size = 1, 
+    arrow = arrow(length = unit(0.1, "inches")),
+    colour = PITCH_FILL # Also accepts "red", "blue' etc
+  ) + 
+  
+  geom_segment(
+    x = 45, xend = 55, 
+    y = 85, yend = 85,
+    lineend = "round", # See available arrow types in example above
+    linejoin = "round",
+    size = 1, 
+    arrow = arrow(length = unit(0.1, "inches")),
+    colour = PITCH_FILL # Also accepts "red", "blue' etc
+  )+ 
+  
+  geom_segment(
+    x = 75, xend = 85, 
+    y = 85, yend = 85,
+    lineend = "round", # See available arrow types in example above
+    linejoin = "round",
+    size = 1, 
+    arrow = arrow(length = unit(0.1, "inches")),
+    colour = PITCH_FILL # Also accepts "red", "blue' etc
+  ) + 
+  ggtitle(
+    "Positional Origin of Assists: \n  Defenders | Midfielders | Attackers"
+  ) -> a1
+```
+
+```{r, warning=FALSE, message=FALSE}
+scores %>% 
+  filter(Action == "Assist") %>% 
+  group_by(`Field Part`, .drop = FALSE) %>% 
+  summarize(n = n(), 
+            p = n()/nrow(.)) -> 
+  
+  assists
+
+assists <- assists %>% arrange(`Field Part`)
+
+assists$y_lab = c(85,50,15)
+assists$x_lab = c(75,75,75)
+
+assists$label = with(assists, paste0(n, " (", round(p, 4)*100, "%)"
+                                     )
+                     )
+
+
+ggplot(data = assists, 
+       aes(x = x_lab, y = y_lab, label = label)) +
+  annotate_pitch(colour = "#999e9b") +
+  theme_pitch(aspect_ratio = NULL) + 
+  geom_point(color = "white") + 
+  geom_text(size=12) + 
+  theme(title = element_text(size = 20)) + 
+  
+  geom_segment(
+    x = 30, xend = 89, 
+    y = 67, yend = 67,
+    lineend = "round", # See available arrow types in example above
+    linejoin = "round",
+    linetype = "dashed", 
+    size = 2, 
+    arrow = arrow(length = unit(0.3, "inches")),
+    colour = "blue" # Also accepts "red", "blue' etc
+  )+ 
+  
+  geom_segment(
+    x = 30, xend = 89, 
+    y = 33, yend = 33,
+    lineend = "round", # See available arrow types in example above
+    linejoin = "round",
+    linetype = "dashed", 
+    size = 2, 
+    arrow = arrow(length = unit(0.3, "inches")),
+    colour = "blue" # Also accepts "red", "blue' etc
+  ) + 
+  ggtitle(
+    "Directional Origin of Assists: \n Left Side (Top) | Middle | Right Side (Bottom)"
+  ) -> a2
+```
+
+```{r,fig.width=10, fig.height=12}
+
+grid.arrange(a1, a2, nrow = 2)
+
+```
+
+Column {data-width=400}
+---
+
+### Goal Differential Through the Season (Including Forfeited Games)
+
+```{r differential over timeline, fig.height=5 }
+
+schedule %>% 
+  mutate(
+    goals_for = cumsum(our_goals), 
+    goals_against = cumsum(our_conceded), 
+    
+    differential = goals_for - goals_against
+  ) %>% 
+  select(game, Date, goals_for, goals_against, differential, opponent) %>% 
+  
+  pivot_longer(
+    cols = c("goals_for", "goals_against"), 
+    values_to = "Val", 
+    names_to = "Type"
+  ) %>% 
+  
+  mutate(
+    Type = case_when(
+      Type == "goals_for" ~ "Goals Scored", 
+      T ~ "Goals Conceded"
+    )
+  ) -> plot_df
+
+max(
+  max(cumsum(schedule$our_goals)) + 1, 
+  max(cumsum(schedule$our_conceded)) + 1
+) -> plot_y_limit
+
+
+plot_df %>% 
+  plot_ly(
+    x = ~game,
+    y = ~Val,
+    color = ~Type,
+    colors = c("red", "#36c959"),
+    
+    type = "scatter",
+    mode = "lines+markers", 
+    
+    text = 
+      with(. , 
+           paste(
+             "Date: ", Date, 
+             "<br>Opponent: ", opponent, 
+             "<br>Goals:", Val, 
+             "<br>Type: ", Type, 
+             "<br>Differential", differential
+    )), 
+    
+    hoverinfo = "text"
+  ) %>% 
+  layout(
+    yaxis = list(
+      range = c(0, plot_y_limit), 
+      title = "Goals For and Against"
+    ), 
+    xaxis = list(
+      title =   "Game #"
+    ),
+    legend = list(
+      orientation = "h", y = -.5
+      )
+    )
+
+
+```
+
+### Goal Differential Distribution By Game (Excluding Forfeited Games)
+
+```{r , fig.width=8, fig.height=6.5}
+
+schedule %>% 
+  mutate(
+    differential = our_goals - our_conceded
+  ) -> schedule
+
+schedule %>% 
+  ggplot(aes(x = differential)) + 
+  geom_histogram(
+    binwidth = 1, 
+    color = "black", 
+    fill = "blue"
+    ) + 
+  
+  scale_x_continuous(
+    labels = seq(from = min(schedule$differential), 
+                 to =  max(schedule$differential), 
+                 by = 1),
+    
+    breaks = seq(from = min(schedule$differential), 
+                 to =  max(schedule$differential), 
+                 by = 1)
+  ) + 
+  
+  scale_y_continuous(
+    breaks = function(x) int_breaks(x, n = 10)
+  ) + 
+  
+  theme_minimal() + 
+  
+  xlab("Goal Differential") + 
+  ylab("Count") + 
+  
+  ggtitle(
+    paste0("Average per Game: ",
+           case_when(mean(schedule$differential) > 0 ~ '+ ',
+                     T ~ ''),
+          round(mean(schedule$differential), 4))
+  ) + 
+  
+  theme(text = element_text(size = 20))
+
+```
+
+Row {data-width=250 .tabset}
+-------------------------------------
+
+### Goals Details 
+
+```{r}
+custom_page_1_font = 14
+col_title_font = 11
+```
+
+```{r }
+
+scores %>% 
+  filter(Action == "Goal") %>% 
+  group_by(`Shot Type`) %>% 
+  summarise(n = n()) %>% 
+  arrange(-n) %>% 
+  rename(
+    Type = `Shot Type`
+  ) %>% 
+  mutate(id = seq(from = 1, to = nrow(.), by = 1)) -> shot_types
+
+n_shot_types <- nrow(shot_types)
+
+scores %>% 
+  filter(Action == "Goal") %>% 
+  group_by(`Position`) %>% 
+  summarise(n = n()) %>% 
+  arrange(-n) %>% 
+  rename(
+    Type = `Position`
+  ) %>% 
+  mutate(id = seq(from = 1, to = nrow(.), by = 1)) -> shot_loc
+
+n_shot_loc <- nrow(shot_loc)
+
+shot_sum <- merge(shot_types %>% na.omit(), shot_loc %>% na.omit(), by = "id", all = T) %>% select(-id)
+
+shot_sum <- 
+  shot_sum %>% 
+  mutate_all(as.character)
+
+shot_sum <- 
+  shot_sum %>%  
+    mutate_all(~replace(., is.na(.), ""))
+
+shot_sum %>% 
+  kable(align = c('l', 'c', 'l', 'c'), 
+        col.names = c("Shot Type", "Number of Goals", "Shot Location", "Number of Goals")) %>% 
+  kable_styling(bootstrap_options = c("condesed", "striped"),
+                font_size = custom_page_1_font) %>% 
+  column_spec(
+    2, 
+    border_right = T
+    ) %>% 
+  row_spec(0, font_size = col_title_font)
+
+```
+
+### Assists Details 
+
+```{r}
+
+scores %>% 
+  filter(Action == "Assist") %>% 
+  group_by(`Pass Type`) %>% 
+  summarise(n = n()) %>% 
+  arrange(-n) %>% 
+  rename(
+    Type = `Pass Type`
+  ) %>% 
+  mutate(id = seq(from = 1, to = nrow(.), by = 1))-> pass_types
+
+n_shot_types <- nrow(pass_types)
+
+scores %>% 
+  filter(Action == "Assist") %>% 
+  group_by(`Position`) %>% 
+  summarise(n = n()) %>% 
+  arrange(-n) %>% 
+  rename(
+    Type = `Position`
+  ) %>% 
+  mutate(id = seq(from = 1, to = nrow(.), by = 1)) -> pass_loc
+
+n_shot_loc <- nrow(pass_loc)
+
+shot_sum <- merge(pass_types %>% na.omit(), pass_loc %>% na.omit(), by = "id", all = T) %>% select(-id)
+
+shot_sum <- 
+  shot_sum %>% 
+  mutate_all(as.character)
+
+shot_sum <- 
+  shot_sum %>% 
+    mutate_all(~replace(., is.na(.), ""))
+
+shot_sum %>% 
+  kable(align = c('l', 'c', 'l', 'c'),  
+        col.names = c("Assist Type", "Number of Ast.", "Assist Location", "Number of Ast.")) %>% 
+  kable_styling(bootstrap_options = c("condesed", "striped"),
+                font_size = custom_page_1_font)  %>% 
+  column_spec(
+    2, 
+    border_right = T
+    ) %>% 
+  row_spec(0, font_size = col_title_font)
+
+```
+
+Individual Performance 
+===
+
+Column
+---
+
+### Personal Goal Ccontributions
+
+```{r}
+
+scores %>% 
+  filter(Action == "Assist") %>% 
+  group_by(Player) %>% 
+  summarise(Assists = n()) %>% 
+  arrange(-Assists) -> ast
+
+scores %>% 
+  filter(Action == "Goal") %>% 
+  group_by(Player) %>% 
+  summarise(Goals = n()) %>% 
+  arrange(-Goals) -> gls
+
+merge(gls, ast, all = T, by = "Player") -> all_
+
+all_$Assists <- ifelse(is.na(all_$Assists), 0, all_$Assists)
+all_$Goals <- ifelse(is.na(all_$Goals), 0, all_$Goals)
+all_$`Goals + Assists` <- all_$Assists + all_$Goals
+
+all_$`% Team's Goals` = paste0(round(all_$Goals/Goals_total,2)*100, "%")
+
+all_ <- 
+  inner_join(
+    x = all_, 
+    y = games_played %>% rename(`Games Played` = games_played), 
+    by = "Player"
+  )
+
+all_ <- 
+  all_ %>% arrange(-`Goals + Assists`, -Goals, -Assists, Player) %>% 
+  select(Player, `Games Played`, `Goals`, `% Team's Goals`, Assists, `Goals + Assists`)
+
+all_ %>% 
+  kable(align = 'c') %>% 
+  kable_styling(bootstrap_options = c("striped", "condensed"))
+```
+
+Column 
+---
+
+### Assists Details
+
+#### Assist Destinations 
+
+```{r }
+
+linkups <- 
+  scores %>% filter(Action == "Goal") %>% 
+    select(Date, Opponent, Score, Player, `Player Position`, `Play Type`) %>% 
+    rename(Scorer = Player) %>% 
+  
+  left_join(
+    scores %>% filter(Action == "Assist") %>% 
+      select(Date, Opponent, Score, Player) %>% 
+      rename(Assister = Player), 
+    
+    by = c("Date", "Opponent", "Score")
+  )
+
+linkups %>% 
+  group_by(Assister) %>% 
+  summarise(total_assist = n()) %>% 
+  filter(!is.na(Assister)) %>% 
+  
+  left_join(
+    linkups %>% 
+      group_by(
+        Assister, Scorer
+      ) %>% 
+      summarise(
+        person_assists = n()
+      ), 
+    
+    by = "Assister"
+  ) %>% 
+  
+  arrange(-total_assist , Assister) -> advanced_assist_tally
+
+advanced_assist_tally <- 
+  advanced_assist_tally %>% 
+  
+  mutate(
+    p_total = paste0(round(person_assists / total_assist, 2) * 100, "%")
+  ) %>% 
+  
+  arrange(-total_assist, -person_assists)
+
+advanced_assist_tally %>% 
+  kable(align = 'c', 
+        col.names = c(
+          "Assist Creator", "Total Assists Given", 
+          "Assist Recipient", "Assists to Recipient", "% of Assist Creator Total"
+        )) %>% 
+  kable_styling(bootstrap_options = c("striped", "condensed"))
+```
+
+#### Assist-less Goals
+
+```{R}
+
+assistless <- 
+  
+  linkups %>% filter(is.na(Assister) ) %>% 
+  group_by(
+    Scorer
+  ) %>% 
+  summarize(Goal = n()) %>% 
+  rename(Player = Scorer) %>% 
+  arrange(-Goal) %>% 
+  merge(gls, by = "Player") %>% 
+  
+  mutate(
+    p_total = paste0(round(Goal / Goals_total, 2) * 100, "%")
+  ) %>% 
+  
+  select(-Goals)
+
+assistless %>% 
+  kable(align = 'c', 
+        col.names = c(
+          "Player", "Assist-less Goals", "% Of Team's Total"
+        )) %>% 
+  kable_styling(bootstrap_options = c("striped", "condensed"))
+
+```
+
+Column 
+---
+
+### Dynamic Duos
+
+* Players in a Duo assist each other for goals
+
+* A total is sourced from a table in `Assist Destinations` table 
+
+```{r}
+
+# variable `Goals_total` was taken from the beginning of the file. Created for th first Value Box 
+
+advanced_assist_tally %>% 
+  
+  rowwise() %>%
+  mutate(new_column = paste(sort(unique(c(Assister, Scorer))), collapse = " and ")) %>% 
+  group_by(new_column) %>% 
+  summarise(total = sum(person_assists)) %>% 
+  arrange(-total)  %>% 
+  mutate(p_total  = paste0(round(total/Goals_total,2) * 100 , "%")) %>% 
+  
+  kable(align = 'c', 
+        col.names = c(
+          "Players in Duo", "Total Goals Scored ", "% of Team's Goals"
+        )) %>% 
+  kable_styling(bootstrap_options = c("striped", "condensed"))
+
+```
+
+Map of Goals 
+===
+
+<!-- column with shiny-esque filters --> 
+Column {data-width=300}
+---
+
+### Filters 
+
+```{r}
+
+scores %>% filter(Action == "Goal") %>%
+  mutate(end_X = 100, 
+         end_Y = 50, 
+         handle = paste0(
+           Player, " ", Score, " vs. ", Opponent, " on ", Date
+         )) %>% 
+  select(-`Pass Type`)-> goals_to_viz 
+
+goals_to_viz <- 
+  left_join(goals_to_viz, 
+            scores %>% filter(Action == "Assist") %>% 
+              select(Date, Opponent, Score, Player, `Pass Type`, `Loc Y`, `Loc X`, Hudson) %>% 
+              rename(Assit_prov = Player, 
+                     Assist_X = `Loc X`, 
+                     Assist_Y = `Loc Y`, 
+                     Assist_Hudson = Hudson
+                     ), 
+            by = c("Date", "Opponent", "Score")
+            )
+
+goals_to_viz <- 
+
+  goals_to_viz %>% 
+    group_by(handle ) %>% 
+    mutate(id = 1:n(), 
+           c = n()) %>% 
+    ungroup() %>%
+    
+    mutate(handle = case_when(c == 2 ~ paste0("Part ", id, ": ", handle), 
+                              T ~ handle)
+           ) %>% 
+    select(-id, -c)
+
+
+selectInput(inputId = 'select_goal', 
+              label = "Select a Goal", 
+              choices = goals_to_viz$handle, 
+              selected = goals_to_viz$handle[1])
+
+```
+
+Column {data-width=750}
+--- 
+
+### Maps
+
+```{r fucntion show_one_goal}
+
+boom_image = "boom2-small.jpg"
+
+show_one_goal <- 
+  function(which_goal){
+    
+    goals_to_viz %>% filter(handle == which_goal) -> plot_df
+    
+    scorer_label_x_mod <- ifelse(plot_df$Assist_X > plot_df$`Loc X`, -2, 2)
+    scorer_label_x_mod <- ifelse(is.na(scorer_label_x_mod), 0, scorer_label_x_mod)
+    
+    scorer_label_y_mod <- ifelse(plot_df$Assist_X > plot_df$`Loc X`, 5, -5)
+    scorer_label_y_mod <- ifelse(is.na(scorer_label_y_mod), 0, scorer_label_y_mod)
+    
+    scorer_label_x_mod <- ifelse(plot_df$`Loc X` > 95, scorer_label_x_mod - 5, scorer_label_x_mod)
+    
+    ###############
+    
+    assist_label_y_mod <- ifelse(plot_df$Assist_X > 95, -5, 0)
+    assist_label_y_mod <- ifelse(is.na(assist_label_y_mod), 0, assist_label_y_mod)
+    
+    assist_label_x_mod <- ifelse(plot_df$Assist_X > 95, -5, 0)
+    assist_label_x_mod <- ifelse(is.na(assist_label_x_mod), 0, assist_label_x_mod)
+    
+    # <--> 
+    assist_label_y_mod <- ifelse(plot_df$Assist_X < 5, 5, 0)
+    assist_label_y_mod <- ifelse(is.na(assist_label_y_mod), 0, assist_label_y_mod)
+    
+    assist_label_x_mod <- ifelse(plot_df$Assist_X < 5, 5, 0)
+    assist_label_x_mod <- ifelse(is.na(assist_label_x_mod), 0, assist_label_x_mod)
+    
+    ###############
+    
+    boom_jpeg = NULL
+    if(plot_df$Position == "Outside the Box"){
+      boom_jpeg = geom_image(aes(x = 98, y = 50), image = boom_image, size = 0.15)
+    }
+    
+    small_add_to_goal_loc <- 0
+    if(plot_df$Position == "Outside the Box"){
+      small_add_to_goal_loc = 2
+    }
+    
+    position_coords =
+      expand.grid(
+        x = seq(from = 0, to = 100, by = 100), 
+    #    coord2 = c(50,50,35,40,65,50,55,85,80,90,60,15, 20, 15,90)
+        y = seq(from = 0, to = 100, by = 100)
+      ) 
+    
+     ggplot(data = position_coords,
+       aes(x = x, y = y)) +
+       theme_void() + 
+       geom_rect(aes(xmin = 0, xmax = 100, 
+                      ymin = 0, ymax = 100), 
+                  fill = PITCH_FILL) + 
+       
+       boom_jpeg + 
+       annotate_pitch(colour = "white", fill = NULL) + 
+       coord_flip(xlim = c(52, 100), ylim = c(0, 100)) + 
+      
+     
+       # this is an assist 
+       geom_segment(aes(x = plot_df$Assist_X , 
+                        y = plot_df$Assist_Y , 
+                        
+                        xend = plot_df$`Loc X`,
+                        yend = plot_df$`Loc Y`),
+                    color = "grey", linetype = "dashed", linewidth = 1, 
+                    arrow = arrow(length = unit(.5, "cm"))
+                    ) + 
+       # this is a shot 
+       geom_segment(aes(x = plot_df$`Loc X`, 
+                        y = plot_df$`Loc Y`, 
+                        
+                        xend = plot_df$end_X - small_add_to_goal_loc,
+                        yend = plot_df$end_Y),
+                    color = "blue", linewidth = 1, 
+                    arrow = arrow(length = unit(.5, "cm"))
+                    ) + 
+       
+       geom_label(aes(x = plot_df$Assist_X + assist_label_x_mod, 
+                      y = plot_df$Assist_Y + assist_label_y_mod), 
+                      fill = "grey", 
+                      label = plot_df$Assit_prov,
+                      size = 10) + 
+       
+       geom_label(aes(x = plot_df$`Loc X` + scorer_label_x_mod, 
+                      y = plot_df$`Loc Y` + scorer_label_y_mod), 
+                      fill = "blue", 
+                      color = "white", 
+                      label = plot_df$Player, 
+                      size = 10)
+    
+  }
+
+```
+
+* Please don't mind inverted arc on top of the box. Fixing it will take too much effort...
+
+```{r}
+output$map_goal = renderPlot(show_one_goal(input$select_goal))
+
+plotOutput('map_goal')
+```
+
+
+Column {data-width=400}
+---
+
+### Description
+
+#### *All descriptions were meant to sound like Ray Hudson*
+
+```{r}
+HTML("<br>")
+```
+
+```{r}
+
+output$text_assist <- renderText({
+  m = goals_to_viz %>% filter(handle == input$select_goal) %>% select(Assist_Hudson) %>% unlist()
+  
+  ifelse(is.na(m), "", m)
+})
+
+output$text_goal <- renderText({
+  goals_to_viz %>% filter(handle == input$select_goal) %>% select(Hudson) %>% unlist()
+})
+
+textOutput('text_assist')
+
+```
+
+```{r}
+HTML("<br>")
+```
+
+```{r}
+textOutput('text_goal')
+```
+
+
+
+Raw Data 
+=== 
+
+```{r}
+
+datatable(
+  scores %>% 
+    mutate(Date = as.Date(Date)) %>% 
+    select(-`Game Half`, -`Season Half`, - `Group`, -`Loc X`, -`Loc Y`, -Message)
+  ,
+  options = list("pageLength" = 25), 
+  rownames = FALSE
+  )
+
+```
